@@ -1,0 +1,5 @@
+target
+oauth.tok
+*:ofx*
+*.out
+*.log

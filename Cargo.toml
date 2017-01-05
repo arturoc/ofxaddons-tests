@@ -1,0 +1,15 @@
+[package]
+name = "ofxaddons-tests"
+version = "0.1.0"
+authors = ["arturo castro <arturo@openframeworks.cc>"]
+
+[dependencies]
+hyper = "0.9.14"
+time = "0.1"
+#git2 = "0.6"
+clap = "2.19.2"
+regex = "0.1"
+walkdir = "1"
+
+[dependencies.json]
+git = "https://github.com/maciejhirsz/json-rust"
