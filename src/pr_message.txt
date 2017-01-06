@@ -1,0 +1,30 @@
+This is an automated pull request that enables continuous integration testing for openFrameworks addons. <sup>[1](#footnote1)</sup>
+
+Before merging this PR you'll need to create an account on https://travis-ci.org and https://ci.appveyor.com using your github account and enable the tests for this repository there.
+
+Once you have created an account at travis.org you can enable tests for this addon at https://travis-ci.org/{owner}/{repo}
+
+And for windows at https://ci.appveyor.com/projects/new
+
+This PR includes test files for travis and appveyor ci services, once you merge it any new commit or PR to your repository will compile this addon for every supported platform against the latest openFrameworks.
+
+This new files can be customized but we recommend to not touch them much except for commenting or uncommenting the different platfoms to test. That way we can ensure that the addon will work for any standard setup. The testing can be further customized (for example to install some dependencies in certain platforms by using some scripts in scripts/platforms there's more instructions on how to use them in the .travis.yml and appveyor.yml files in this PR.
+
+Once your addon tests are working you can add a badge to your readme files so people using your addon can see the build status:
+
+For travis you can just copy and paste the following markdown:
+
+```
+[![Build status](https://travis-ci.org/{owner}/{repo}.svg?branch=master)](https://travis-ci.org/{owner}/{repo})
+```
+
+which will look like: [![Build status](https://travis-ci.org/{owner}/{repo}.svg?branch=master)](https://travis-ci.org/{owner}/{repo})
+
+For appveyor you can find the badge code at https://ci.appveyor.com/project/{owner}/{repo}/settings/badges
+
+If you have any doubt you can ask directly in this PR or in the openFrameworks forum
+
+
+<a name=\"myfootnote1\">[1]</a> We believe this repository contains an openFrameworks addon because it's name starts with ofx, it {reason}.
+
+If this repository isn't really an openFrameworks addon, it is but it's not maintained anymore or you are simply not interested in testing it, we are really sorry for bothering you. You can just close or ignore this PR and no further communications will be sent to this repository.
