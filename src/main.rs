@@ -27,12 +27,12 @@ use std::error::Error;
 
 static OFXADDONS_LOGIN: &'static str = "ofxaddons-tests";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Owner{
     login: String
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Repository {
     name: String,
     html_url: String,
@@ -217,11 +217,7 @@ fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
 
 fn build_repos_index(oauth_token: &str, checkonly: bool) -> Vec<Repository>{
     let mut client = Client::new();
-    let mut url = if checkonly{
-        "https://api.github.com/search/repositories?q=ofx+in:name&per_page=100".to_string()
-    }else{
-        "https://api.github.com/search/repositories?q=ofx+in:name+user:arturoc&per_page=100".to_string()
-    };
+    let mut url = "https://api.github.com/search/repositories?q=ofx+in:name&per_page=100".to_string();
 
     let mut repos = vec![];
 
@@ -487,7 +483,7 @@ fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
 
     let client = Client::new();
     let mut new_prs_sent = HashSet::new();
-    for repo in repos.iter().filter(|&repo| !prs_sent.contains(&(repo.owner.login.clone() + ":" + &repo.name))).take(1){
+    for repo in repos.iter().filter(|&repo| !prs_sent.contains(&(repo.owner.login.clone() + ":" + &repo.name))){
         let pr_res = send_pr(&client, &oauth, oauth_token, &repo);
         if pr_res.is_ok(){
             new_prs_sent.insert(repo.owner.login.clone() + ":" + &repo.name);
@@ -506,16 +502,47 @@ fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
     }
 }
 
+fn send_one_test_pr(repo: &Repository, oauth_token: &str){
+    if checkaddons(&vec![repo.clone()])[0]{
+        println!("Correct addon detected");
+        let oauth = header::Bearer{
+            token: oauth_token.to_string(),
+        };
+        let mut prs_sent = String::new();
+        let prs_sent = match File::open("prs_sent"){
+            Ok(mut file) => {
+                file.read_to_string(&mut prs_sent).unwrap();
+                prs_sent.lines().map(|line| line.to_string()).collect::<HashSet<String>>()
+            }
+            Err(_) => HashSet::new(),
+        };
+        if !prs_sent.contains(&(repo.owner.login.clone() + ":" + &repo.name)){
+            println!("PR not sent yet, sending");
+            git_clone("https://github.com/openframeworks/ofxAddonTemplate")
+                .expect("Couldn't clone ofxAddonTemplate");
+            let client = Client::new();
+            let pr_sent = send_pr(&client, &oauth, oauth_token, repo);
+
+            fs::remove_dir_all("ofxAddonTemplate")
+                .expect("Couldn't remove repository directory");
+            pr_sent.unwrap();
+            println!("PR sent correctly");
+        }else{
+            panic!("PR already sent");
+        }
+    }
+}
+
 fn timestamp(ts: &time::Tm) -> String{
     format!("{}{:02}{:02}{:02}{:02}{:02}", 1900 + ts.tm_year, ts.tm_mon + 1, ts.tm_mday, ts.tm_hour, ts.tm_min, ts.tm_sec)
 }
 
-fn checkaddons(repos: &Vec<Repository>){
+fn checkaddons(repos: &Vec<Repository>) -> Vec<bool>{
     //let client = Client::new();
     let ts = time::now();
     let mut failed = File::create(format!("failed_addons{}.out", timestamp(&ts))).unwrap();
     let mut correct = File::create(format!("correct_addons{}.out", timestamp(&ts))).unwrap();
-    for repo in repos.iter(){
+    repos.iter().map(|repo|{
         let slug = format!("{}:{}", repo.owner.login, repo.name);
         let test_addon_result = if repo.whitelisted {
             Ok("Addon is included in the whitelist".to_string())
@@ -530,12 +557,14 @@ fn checkaddons(repos: &Vec<Repository>){
             }
             correct.write(&slug.into_bytes()).unwrap();
             correct.write(&format!(" {}\n", test_addon_result.unwrap()).into_bytes()).unwrap();
+            true
         }else{
             println!("{} doesn't look like a correct addon, keeping in the fs for review.", slug);
             failed.write(&slug.into_bytes()).unwrap();
             failed.write(&"\n".to_string().into_bytes()).unwrap();
+            false
         }
-    }
+    }).collect()
 }
 
 fn checkexistingaddons(){
@@ -589,17 +618,46 @@ fn main() {
                 .short("l")
                 .long("listonly")
                 .help("Only lists potential addons by name"))
+        .arg(Arg::with_name("only")
+                .short("o")
+                .long("only")
+                .help("Only send pr to specified repository with format owner:repo")
+                .value_name("REPO")
+                .takes_value(true))
             .get_matches();
     let checkonly = matches.occurrences_of("checkonly") > 0;
     let listonly = matches.occurrences_of("listonly") > 0;
     let checkexisting = matches.occurrences_of("checkexisting") > 0;
+    let only = matches.occurrences_of("only") > 0;
 
     let mut oauth_token = String::new();
     File::open("oauth.tok").unwrap().read_to_string(&mut oauth_token).unwrap();
     let oauth_token = oauth_token.trim();
 
-    let repos = if !checkexisting {
+    let repos = if !checkexisting && !only{
         build_repos_index(oauth_token, checkonly || listonly)
+    }else if only{
+        if let Some(repo) = matches.value_of("only"){
+            let owner_repo = repo.split(":").collect::<Vec<_>>();
+            if owner_repo.len() == 2 {
+                let owner = owner_repo[0];
+                let repo = owner_repo[1];
+                println!("Checking {}:{}", owner, repo);
+                vec![Repository{
+                    name: repo.to_owned(),
+                    html_url: "https://github.com/".to_owned() + owner + "/" + repo,
+                    url: "https://github.com/".to_owned() + owner + "/" + repo,
+                    owner: Owner{
+                        login: owner.to_owned(),
+                    },
+                    whitelisted: false,
+                }]
+            }else{
+                panic!("REPO doesn't have format OWNER:REPO")
+            }
+        }else{
+            panic!("REPO not specified")
+        }
     }else{
         vec![]
     };
@@ -609,10 +667,16 @@ fn main() {
             println!("{}:{}", repo.owner.login, repo.name)
         }
     }else if checkexisting{
+        println!("Checking exisiting");
         checkexistingaddons();
     }else if checkonly{
+        println!("Only checking");
         checkaddons(&repos);
+    }else if only{
+        let repo = &repos[0];
+        send_one_test_pr(repo, oauth_token);
     }else{
+        println!("Sending all PRs");
         send_test_prs(&repos, oauth_token);
     }
 
