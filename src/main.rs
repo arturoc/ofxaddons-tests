@@ -4,10 +4,13 @@ extern crate time;
 extern crate clap;
 extern crate regex;
 extern crate walkdir;
+extern crate futures;
+extern crate tokio_core;
+extern crate hyper_tls;
 
-use hyper::client::Client;
-use hyper::header;
-use hyper::status::StatusCode;
+use hyper::client::{Client, HttpConnector};
+use hyper::{header, Request, Body, StatusCode};
+use futures::{Future, Stream};
 
 use clap::{Arg, App};
 
@@ -24,6 +27,9 @@ use std::thread;
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Output};
 use std::error::Error;
+use simple_http::SimpleHttp;
+
+mod simple_http;
 
 static OFXADDONS_LOGIN: &'static str = "ofxaddons-tests";
 
@@ -174,6 +180,8 @@ fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
                 readme_str.to_lowercase().contains("openframeworks")
         });
 
+    let has_addon_config = Path::new(repo_path).join(Path::new("addon_config.mk")).exists();
+
     let reasons = [
         if has_src_header {
             Some(format!("has a src/{}.h file", addon_name))
@@ -203,21 +211,30 @@ fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
             Some("has a readme file that mentions openframeworks".to_string())
         }else{
             None
+        },
+
+        if has_addon_config {
+            Some("has an addon_config.mk file in the root folder".to_string())
+        }else{
+            None
         }
     ];
 
     let reasons = reasons.iter().filter_map(|reason| reason.clone()).collect::<Vec<_>>();
 
-    if has_src_header || includes_of_source || has_correct_lib || (has_c_source && readme_contains_of){
+    if has_src_header || includes_of_source || has_correct_lib || (has_c_source && readme_contains_of) || has_addon_config{
         Ok(reasons[0..reasons.len()-1].join(", ") + " and " + &reasons.last().unwrap())
     }else{
         Err(())
     }
 }
 
-fn build_repos_index(oauth_token: &str, checkonly: bool) -> Vec<Repository>{
-    let mut client = Client::new();
-    let mut url = "https://api.github.com/search/repositories?q=ofx+in:name&per_page=100".to_string();
+fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
+    let mut url = if let Some(owner) = owner {
+        "https://api.github.com/search/repositories?q=ofx+in:name+user:".to_string() + owner + "&per_page=100"
+    }else{
+        "https://api.github.com/search/repositories?q=ofx+in:name&per_page=100".to_string()
+    };
 
     let mut repos = vec![];
 
@@ -250,24 +267,14 @@ fn build_repos_index(oauth_token: &str, checkonly: bool) -> Vec<Repository>{
                         .collect::<Vec<_>>();
 
     println!("Next: {}", url);
+    let mut url = url.parse::<hyper::Uri>().unwrap();
+    let mut http = SimpleHttp::new().unwrap();
     loop{
-        let mut res = client.get(&url)
-                    .header(header::UserAgent("ofxaddons".to_string()))
-                    .header(header::Authorization(oauth.clone()))
-                    .send()
-                    .unwrap();
-
-        let mut body = String::new();
-        res.read_to_string(&mut body).unwrap();
-        match res.status{
-            hyper::Ok => {},
-            _ => {
-                println!("{}", body);
-                break;
-            }
-        };
-
-        let parsed = json::parse(&body).unwrap();
+        let mut req = Request::new(hyper::Method::Get, url);
+        req.headers_mut().set(header::UserAgent::new("ofxaddons".to_string()));
+        req.headers_mut().set(header::Authorization(oauth.clone()));
+        let res = http.https_request(req).unwrap();
+        let parsed = json::parse(&res.body).unwrap();
         let new_repos = parsed["items"].members()
             .filter(|&repo| repo["name"].to_string().starts_with("ofx"))
             .filter(|&repo| !blacklist.iter().any(|re| re.is_match(&repo["name"].to_string())))
@@ -288,16 +295,16 @@ fn build_repos_index(oauth_token: &str, checkonly: bool) -> Vec<Repository>{
         repos.extend(new_repos);
 
         match res.headers.get_raw("Link"){
-            Some(next_link) => if !next_link.is_empty(){
-                let ratelimit = String::from_utf8(res.headers.get_raw("X-RateLimit-Limit").unwrap()[0].clone()).unwrap();
-                let remaining = String::from_utf8(res.headers.get_raw("X-RateLimit-Remaining").unwrap()[0].clone()).unwrap();
-                let reset = String::from_utf8(res.headers.get_raw("X-RateLimit-Reset").unwrap()[0].clone()).unwrap();
+            Some(next_link) => if next_link.len() > 0{
+                let ratelimit = String::from_utf8(res.headers.get_raw("X-RateLimit-Limit").unwrap().iter().next().unwrap().to_vec()).unwrap();
+                let remaining = String::from_utf8(res.headers.get_raw("X-RateLimit-Remaining").unwrap().iter().next().unwrap().to_vec()).unwrap();
+                let reset = String::from_utf8(res.headers.get_raw("X-RateLimit-Reset").unwrap().iter().next().unwrap().to_vec()).unwrap();
                 let reset = time::Timespec{
                     sec: reset.parse::<i64>().unwrap() + 10,
                     nsec: 0
                 };
 
-                let link = String::from_utf8(res.headers.get_raw("Link").unwrap()[0].clone()).unwrap();
+                let link = String::from_utf8(res.headers.get_raw("Link").unwrap().iter().next().unwrap().to_vec()).unwrap();
                 let rels: HashMap<_,_> = link.split(",")
                     .map(|rel|{
                         let mut link_rel = rel.split(";");
@@ -311,12 +318,12 @@ fn build_repos_index(oauth_token: &str, checkonly: bool) -> Vec<Repository>{
 
                 match rels.get("next"){
                     Some(next) => {
-                        url = next.clone();
+                        url = next.parse().unwrap();
                         if remaining.parse::<u32>().unwrap()==0 {
                             let pause = reset - time::now().to_timespec();
                             println!("pausing for {}s", pause.num_seconds());
                             thread::sleep(pause.to_std().unwrap());
-                            client = Client::new();
+                            // http = SimpleHttp::new();
                         }
                     },
                     None => break
@@ -363,32 +370,32 @@ fn add_test_files(repo: &Repository, repo_url: &str, reason: &str) -> Result<Str
     Ok(commit_msg)
 }
 
-fn send_pr(client: &Client, oauth: &header::Bearer, oauth_token: &str, repo: &Repository) -> Result<(),String>{
+fn send_pr(http: &mut SimpleHttp, oauth: &header::Bearer, oauth_token: &str, repo: &Repository) -> Result<(),String>{
     let commit_title = "Adding travis and appveyor cotinuous integration tests";
 
     let fork_url = "https://api.github.com/repos/".to_string() + &repo.owner.login + "/" + &repo.name + "/forks";
-    let mut res = try!(client.post(&fork_url)
-        .header(header::UserAgent("ofxaddons".to_string()))
-        .header(header::Authorization(oauth.clone()))
-        .send().map_err(|err| err.description().to_string()));
+    let fork_url = fork_url.parse().unwrap();
+    let mut req = hyper::Request::new(hyper::Method::Post, fork_url);
+    req.headers_mut().set(header::UserAgent::new("ofxaddons".to_string()));
+    req.headers_mut().set(header::Authorization(oauth.clone()));
+    let res = try!(http.https_request(req).map_err(|err| err.description().to_string()));
     match res.status{
         hyper::Ok | StatusCode::Accepted => {},
         _ => {
-            let mut body = String::new();
-            res.read_to_string(&mut body).unwrap();
-            return Err(format!("Error forking: {} {}", res.status, body));
+            return Err(format!("Error forking: {} {}", res.status, res.body));
         }
     }
 
     let repo_check_url = "https://api.github.com/repos/".to_string() + OFXADDONS_LOGIN + "/" + &repo.name;
     loop{
         thread::sleep(std::time::Duration::from_secs(10));
-        match client.get(&repo_check_url)
-            .header(header::UserAgent("ofxaddons".to_string()))
-            .header(header::Authorization(oauth.clone()))
-            .send(){
-                Ok(hyper::client::response::Response{status: hyper::Ok, ..}) => break,
-                _ => println!("Fork hasn't finished yet, waiting 10s"),
+        let repo_check_url = repo_check_url.parse().unwrap();
+        let mut req = hyper::Request::new(hyper::Method::Get, repo_check_url);
+        req.headers_mut().set(header::UserAgent::new("ofxaddons".to_string()));
+        req.headers_mut().set(header::Authorization(oauth.clone()));
+        match http.https_request(req) {
+            Ok(simple_http::Response{status: hyper::Ok, ..}) => break,
+            _ => println!("Fork hasn't finished yet, waiting 10s"),
         }
     }
 
@@ -417,19 +424,18 @@ fn send_pr(client: &Client, oauth: &header::Bearer, oauth_token: &str, repo: &Re
                         \"base\": \"master\",
                         \"head\": \"{}:master\"
                     }}", commit_title, commit_msg.replace("\n","\\n"), OFXADDONS_LOGIN);
+                    let mut req = hyper::Request::new(hyper::Method::Post, pr_url.parse().unwrap());
+                    req.headers_mut().set(header::UserAgent::new("ofxaddons".to_string()));
+                    req.headers_mut().set(header::Authorization(oauth.clone()));
+                    req.set_body(body);
 
-                    let mut res = try!(client.post(&pr_url)
-                        .header(header::UserAgent("ofxaddons".to_string()))
-                        .header(header::Authorization(oauth.clone()))
-                        .body(&body)
-                        .send().map_err(|err| err.description().to_string()));
+                    let mut res = try!(http.https_request(req)
+                        .map_err(|err| err.description().to_string()));
 
                     if res.status.is_success() {
                         Ok(())
                     }else{
-                        let mut body = String::new();
-                        res.read_to_string(&mut body).unwrap();
-                        Err(format!("Error creating PR: {} {}", res.status, body))
+                        Err(format!("Error creating PR: {} {}", res.status, res.body))
                     }
                 }
 
@@ -444,17 +450,14 @@ fn send_pr(client: &Client, oauth: &header::Bearer, oauth_token: &str, repo: &Re
 
 
     let rm_url = "https://api.github.com/repos/".to_string() + OFXADDONS_LOGIN + "/" + &repo.name;
-    let mut res = client.delete(&rm_url)
-        .header(header::UserAgent("ofxaddons".to_string()))
-        .header(header::Authorization(oauth.clone()))
-        .send()
-        .unwrap();
+    let mut req = hyper::Request::new(hyper::Method::Delete, rm_url.parse().unwrap());
+    req.headers_mut().set(header::UserAgent::new("ofxaddons".to_string()));
+    req.headers_mut().set(header::Authorization(oauth.clone()));
+    let res = http.https_request(req).unwrap();
     let pr_res = if res.status.is_success() {
         pr_res
     }else{
-        let mut body = String::new();
-        res.read_to_string(&mut body).unwrap();
-        Err(format!("Error removing fork {}:{} {} {}", repo.owner.login, repo.name, res.status, body))
+        Err(format!("Error removing fork {}:{} {} {}", repo.owner.login, repo.name, res.status, res.body))
     };
 
     fs::remove_dir_all(&repo.name).expect("Couldn't remove repository directory");
@@ -481,10 +484,10 @@ fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
     let mut errors = File::create(format!("pr_errors{}.out", timestamp(&ts))).unwrap();
     let mut correct = File::create(format!("pr_correct{}.out", timestamp(&ts))).unwrap();
 
-    let client = Client::new();
+    let mut http = SimpleHttp::new().unwrap();
     let mut new_prs_sent = HashSet::new();
     for repo in repos.iter().filter(|&repo| !prs_sent.contains(&(repo.owner.login.clone() + ":" + &repo.name))){
-        let pr_res = send_pr(&client, &oauth, oauth_token, &repo);
+        let pr_res = send_pr(&mut http, &oauth, oauth_token, &repo);
         if pr_res.is_ok(){
             new_prs_sent.insert(repo.owner.login.clone() + ":" + &repo.name);
             correct.write(&format!("PR sent correctly to: {}:{}", repo.owner.login, repo.name).into_bytes()).unwrap();
@@ -520,8 +523,8 @@ fn send_one_test_pr(repo: &Repository, oauth_token: &str){
             println!("PR not sent yet, sending");
             git_clone("https://github.com/openframeworks/ofxAddonTemplate")
                 .expect("Couldn't clone ofxAddonTemplate");
-            let client = Client::new();
-            let pr_sent = send_pr(&client, &oauth, oauth_token, repo);
+            let mut http = SimpleHttp::new().unwrap();
+            let pr_sent = send_pr(&mut http, &oauth, oauth_token, repo);
 
             fs::remove_dir_all("ofxAddonTemplate")
                 .expect("Couldn't remove repository directory");
@@ -618,26 +621,33 @@ fn main() {
                 .short("l")
                 .long("listonly")
                 .help("Only lists potential addons by name"))
-        .arg(Arg::with_name("only")
-                .short("o")
-                .long("only")
+        .arg(Arg::with_name("repo")
+                .short("r")
+                .long("repo")
                 .help("Only send pr to specified repository with format owner:repo")
                 .value_name("REPO")
+                .takes_value(true))
+        .arg(Arg::with_name("owner")
+                .short("o")
+                .long("owner")
+                .help("Only send pr to repositories owned by OWNER")
+                .value_name("OWNER")
                 .takes_value(true))
             .get_matches();
     let checkonly = matches.occurrences_of("checkonly") > 0;
     let listonly = matches.occurrences_of("listonly") > 0;
     let checkexisting = matches.occurrences_of("checkexisting") > 0;
-    let only = matches.occurrences_of("only") > 0;
+    let only = matches.occurrences_of("repo") > 0;
+    let owner = matches.value_of("owner");
 
     let mut oauth_token = String::new();
     File::open("oauth.tok").unwrap().read_to_string(&mut oauth_token).unwrap();
     let oauth_token = oauth_token.trim();
 
     let repos = if !checkexisting && !only{
-        build_repos_index(oauth_token, checkonly || listonly)
+        build_repos_index(oauth_token, owner)
     }else if only{
-        if let Some(repo) = matches.value_of("only"){
+        if let Some(repo) = matches.value_of("repo"){
             let owner_repo = repo.split(":").collect::<Vec<_>>();
             if owner_repo.len() == 2 {
                 let owner = owner_repo[0];

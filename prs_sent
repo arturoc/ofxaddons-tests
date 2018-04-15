@@ -1,4 +1,12 @@
+prisonerjohn:ofxBinaryMesh
+prisonerjohn:ofxWarp
 edap:ofxLSystem
-edap:ofxLSystemGrammar
+prisonerjohn:ofxPreset
+prisonerjohn:ofxLoggerChannel
+prisonerjohn:ofxBillboard
+prisonerjohn:ofxSet
 arturoc:ofxTween
+prisonerjohn:ofxReachability
+edap:ofxLSystemGrammar
 arturoc:ofxHttpUtils
+prisonerjohn:ofxTextLabel

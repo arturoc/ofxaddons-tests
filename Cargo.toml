@@ -4,12 +4,15 @@ version = "0.1.0"
 authors = ["arturo castro <arturo@openframeworks.cc>"]
 
 [dependencies]
-hyper = "0.9.14"
+hyper = "0.11.25"
 time = "0.1"
 #git2 = "0.6"
 clap = "2.19.2"
 regex = "0.1"
 walkdir = "1"
+futures = "0.1.17"
+tokio-core = "0.1.11"
+hyper-tls = "0.1.3"
 
 [dependencies.json]
 git = "https://github.com/maciejhirsz/json-rust"
