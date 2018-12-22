@@ -3,3 +3,4 @@ oauth.tok
 *:ofx*
 *.out
 *.log
+.history
