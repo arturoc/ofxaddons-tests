@@ -1,0 +1,14 @@
+prisonerjohn:ofxBillboard
+prisonerjohn:ofxReachability
+edap:ofxLSystem
+edap:ofxLSystemGrammar
+prisonerjohn:ofxLoggerChannel
+prisonerjohn:ofxPreset
+arturoc:ofxHttpUtils
+arturoc:ofxTween
+prisonerjohn:ofxBinaryMesh
+arturoc:ofxAssimpSkeleton
+prisonerjohn:ofxTextLabel
+prisonerjohn:ofxSet
+prisonerjohn:ofxWarp
+thomasgeissl:ofxGit2

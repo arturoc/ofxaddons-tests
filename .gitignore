@@ -1,6 +1,4 @@
 target
 oauth.tok
-*:ofx*
-*.out
-*.log
+data
 .history

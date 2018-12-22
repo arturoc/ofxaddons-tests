@@ -17,7 +17,7 @@ use std::io::{Read, Write, Result as IoResult};
 use std::io::BufReader;
 use std::io::BufRead;
 use std::fs::{self, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Output};
@@ -41,28 +41,36 @@ struct Repository {
     whitelisted: bool,
 }
 
-fn git_clone(repo: &str) -> IoResult<Output>{
-    println!("Cloning {}", repo);
+impl Repository{
+    fn path(&self) -> PathBuf {
+        Path::new("data").join(&self.name).to_owned()
+    }
+}
+
+fn git_clone<P: AsRef<Path>>(repo: &str, path: P) -> IoResult<Output>{
+    println!("Cloning {} to {}", repo, path.as_ref().display());
     Command::new("git")
             .arg("clone")
             .arg(repo)
+            .arg(path.as_ref())
             .output()
 }
 
-fn git_shallow_clone(repo: &str, path: &str) -> IoResult<Output>{
-    println!("Cloning {}", repo);
-    Command::new("git")
-            .arg("clone")
+fn git_shallow_clone<P: AsRef<Path>>(repo: &str, path: P) -> IoResult<Output>{
+    println!("Shallow cloning {} to {}", repo, path.as_ref().display());
+    let mut command = Command::new("git");
+    command.arg("clone")
             .arg("--depth")
             .arg("1")
             .arg("--branch")
             .arg("master")
             .arg(repo)
-            .arg(path)
-            .output()
+            .arg(path.as_ref())
+            .current_dir("data");
+    command.output()
 }
 
-fn git_add(repo: &str, args: &str) -> IoResult<Output>{
+fn git_add<P: AsRef<Path>>(repo: P, args: &str) -> IoResult<Output>{
     Command::new("git")
             .arg("add")
             .arg(args)
@@ -70,7 +78,7 @@ fn git_add(repo: &str, args: &str) -> IoResult<Output>{
             .output()
 }
 
-fn git_commit(repo: &str, message: &str) -> IoResult<Output>{
+fn git_commit<P: AsRef<Path>>(repo: P, message: &str) -> IoResult<Output>{
     Command::new("git")
             .arg("commit")
             .arg("-m")
@@ -79,7 +87,7 @@ fn git_commit(repo: &str, message: &str) -> IoResult<Output>{
             .output()
 }
 
-fn git_push(repo: &str, url: &str) -> IoResult<Output>{
+fn git_push<P: AsRef<Path>>(repo: P, url: &str) -> IoResult<Output>{
     Command::new("git")
             .arg("push")
             .arg(url)
@@ -88,12 +96,12 @@ fn git_push(repo: &str, url: &str) -> IoResult<Output>{
             .output()
 }
 
-fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
-    if !Path::new(repo_path).exists(){
+fn test_correct_addon<P: AsRef<Path>>(repo_path: P, addon_name: &str) -> Result<String, ()>{
+    if !repo_path.as_ref().exists(){
         return Err(());
     }
-    let src_path = Path::new(repo_path).join("src");
-    let libs_path = Path::new(repo_path).join("libs");
+    let src_path = repo_path.as_ref().join("src");
+    let libs_path = repo_path.as_ref().join("libs");
     let has_src = src_path.exists();
     let has_src_header = src_path.join(&[addon_name, ".h"].concat()).exists();
     let has_libs = libs_path.exists();
@@ -120,7 +128,7 @@ fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
         }
     };
 
-    let of_headers_file = BufReader::new(File::open("of_headers").unwrap());
+    let of_headers_file = BufReader::new(File::open("config/of_headers").unwrap());
     let of_headers = of_headers_file.lines().map(|line| line.unwrap()).collect::<Vec<_>>();
     let of_headers_regex = of_headers.iter()
         .map(|header| Regex::new(&format!("#include\\s*\"{}\"",header)).unwrap())
@@ -159,7 +167,7 @@ fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
             entry.path().extension().unwrap() == "mm")
         .count() > 0;
 
-    let readme_contains_of = Path::new(repo_path).read_dir().unwrap()
+    let readme_contains_of = repo_path.as_ref().read_dir().unwrap()
         .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_file())
         .filter(|entry| {
             let path = entry.as_ref().unwrap().path();
@@ -174,7 +182,7 @@ fn test_correct_addon(repo_path: &str, addon_name: &str) -> Result<String, ()>{
                 readme_str.to_lowercase().contains("openframeworks")
         });
 
-    let has_addon_config = Path::new(repo_path).join(Path::new("addon_config.mk")).exists();
+    let has_addon_config = repo_path.as_ref().join(Path::new("addon_config.mk")).exists();
 
     let reasons = [
         if has_src_header {
@@ -232,7 +240,7 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
 
     let mut repos = vec![];
 
-    let mut blacklist_file = File::open("blacklist_re").unwrap();
+    let mut blacklist_file = File::open("config/blacklist_re").unwrap();
     let mut blacklist_str = String::new();
     blacklist_file.read_to_string(&mut blacklist_str).unwrap();
     let mut blacklist = blacklist_str.lines()
@@ -240,7 +248,7 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
                         .map(|item| Regex::new(item).unwrap())
                         .collect::<Vec<_>>();
 
-    let mut blacklist_file = File::open("blacklist").unwrap();
+    let mut blacklist_file = File::open("config/blacklist").unwrap();
     let mut blacklist_str = String::new();
     blacklist_file.read_to_string(&mut blacklist_str).unwrap();
     blacklist.extend(blacklist_str.lines()
@@ -249,7 +257,7 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
                         .map(|item| Regex::new(&item).unwrap()));
 
 
-    let mut whitelist_file = File::open("whitelist").unwrap();
+    let mut whitelist_file = File::open("config/whitelist").unwrap();
     let mut whitelist_str = String::new();
     whitelist_file.read_to_string(&mut whitelist_str).unwrap();
     let whitelist = whitelist_str.lines()
@@ -334,28 +342,28 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
 }
 
 fn add_test_files(repo: &Repository, repo_url: &str, reason: &str) -> Result<String, String>{
-    let travis = repo.name.clone() + "/.travis.yml";
-    let appveyor = repo.name.clone() + "/.appveyor.yml";
+    let travis = repo.path().join(".travis.yml");
+    let appveyor = repo.path().join(".appveyor.yml");
     let commit_title = "Adding travis and appveyor cotinuous integration tests";
     let commit_msg = format!(include_str!("pr_message.txt"), owner=repo.owner.login, repo=repo.name, reason=reason);
-    fs::copy("ofxAddonTemplate/.travis.yml", travis)
+    fs::copy("data/ofxAddonTemplate/.travis.yml", travis)
         .expect("Couldn't copy .travis.yml");
-    fs::copy("ofxAddonTemplate/.appveyor.yml", appveyor)
+    fs::copy("data/ofxAddonTemplate/.appveyor.yml", appveyor)
         .expect("Couldn't copy .appveyor.yml");
-    let out = git_add(&repo.name, ".travis.yml").expect("git add .travis.yml failed");
+    let out = git_add(&repo.path(), ".travis.yml").expect("git add .travis.yml failed");
     if !out.status.success(){
         return Err(format!("git add .travis.yml failed"));
     }
-    let out = git_add(&repo.name, ".appveyor.yml").expect("git add .appveyor.yml failed");
+    let out = git_add(&repo.path(), ".appveyor.yml").expect("git add .appveyor.yml failed");
     if !out.status.success(){
         return Err(format!("git add .appveyor.yml failed"));
     }
     let message = commit_title.to_string() + "\n\n" + &commit_msg;
-    let out = git_commit(&repo.name, &message).expect("git commit test files failed");
+    let out = git_commit(&repo.path(), &message).expect("git commit test files failed");
     if !out.status.success(){
         return Err(format!("git commit test files failed"));
     }
-    let out = git_push(&repo.name, &repo_url).expect("git push failed");
+    let out = git_push(&repo.path(), &repo_url).expect("git push failed");
     if !out.status.success(){
         return Err(format!("git push failed"));
     }
@@ -394,12 +402,12 @@ fn send_pr(http: &mut reqwest::Client, oauth_token: &str, repo: &Repository) -> 
 
     let repo_url = "https://".to_string() + oauth_token + "@github.com/" + OFXADDONS_LOGIN + "/" + &repo.name;
 
-    try!(git_clone(&repo_url).map_err(|err| err.description().to_string()));
+    try!(git_clone(&repo_url, repo.path()).map_err(|err| err.description().to_string()));
 
-    let test_addon_result = test_correct_addon(&repo.name, &repo.name);
+    let test_addon_result = test_correct_addon(repo.path(), &repo.name);
     let pr_res = if repo.whitelisted || test_addon_result.is_ok(){
-        let travis = repo.name.clone() + "/.travis.yml";
-        let appveyor = repo.name.clone() + "/.appveyor.yml";
+        let travis = repo.path().join(".travis.yml");
+        let appveyor = repo.path().join(".appveyor.yml");
 
         if !Path::new(&travis).exists() && !Path::new(&appveyor).exists(){
             let reason = if repo.whitelisted {
@@ -453,14 +461,15 @@ fn send_pr(http: &mut reqwest::Client, oauth_token: &str, repo: &Repository) -> 
         Err(format!("Error removing fork {}:{} {} {:?}", repo.owner.login, repo.name, res.status(), res.text()))
     };
 
-    fs::remove_dir_all(&repo.name).expect("Couldn't remove repository directory");
+    fs::remove_dir_all(&repo.path()).expect("Couldn't remove repository directory");
 
     pr_res
 }
 
 fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
+    let prs_sent_path = Path::new("config").join("prs_sent");
     let mut prs_sent = String::new();
-    let prs_sent = match File::open("prs_sent"){
+    let prs_sent = match File::open(&prs_sent_path){
         Ok(mut file) => {
             file.read_to_string(&mut prs_sent).unwrap();
             prs_sent.lines().map(|line| line.to_string()).collect::<HashSet<String>>()
@@ -468,10 +477,11 @@ fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
         Err(_) => HashSet::new(),
     };
 
-    git_clone("https://github.com/openframeworks/ofxAddonTemplate").expect("Couldn't clone ofxAddonTemplate");
+    git_clone("https://github.com/openframeworks/ofxAddonTemplate", "data/ofxAddonTemplate")
+        .expect("Couldn't clone ofxAddonTemplate");
     let ts = time::now();
-    let mut errors = File::create(format!("pr_errors{}.out", timestamp(&ts))).unwrap();
-    let mut correct = File::create(format!("pr_correct{}.out", timestamp(&ts))).unwrap();
+    let mut errors = File::create(Path::new("data").join(format!("pr_errors{}.out", timestamp(&ts)))).unwrap();
+    let mut correct = File::create(Path::new("data").join(format!("pr_correct{}.out", timestamp(&ts)))).unwrap();
 
     let mut default_headers = header::HeaderMap::new();
     default_headers.append(header::USER_AGENT, header::HeaderValue::from_static("ofxaddons"));
@@ -491,29 +501,31 @@ fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
         }
     }
 
-    fs::remove_dir_all("ofxAddonTemplate").expect("Couldn't remove repository directory");
+    fs::remove_dir_all("data/ofxAddonTemplate").expect("Couldn't remove repository directory");
 
     new_prs_sent.extend(prs_sent.into_iter());
-    let mut prs_sent_file = File::create("prs_sent").unwrap();
+    let mut prs_sent_file = File::create(&prs_sent_path).unwrap();
     for pr in new_prs_sent{
         prs_sent_file.write(&(pr + "\n").into_bytes()).unwrap();
     }
 }
 
 fn send_one_test_pr(repo: &Repository, oauth_token: &str){
+    let prs_sent_path = Path::new("config").join("prs_sent");
     if checkaddons(&vec![repo.clone()])[0]{
         println!("Correct addon detected");
         let mut prs_sent = String::new();
-        let prs_sent = match File::open("prs_sent"){
+        let mut prs_sent = match File::open(&prs_sent_path){
             Ok(mut file) => {
                 file.read_to_string(&mut prs_sent).unwrap();
                 prs_sent.lines().map(|line| line.to_string()).collect::<HashSet<String>>()
             }
             Err(_) => HashSet::new(),
         };
-        if !prs_sent.contains(&(repo.owner.login.clone() + ":" + &repo.name)){
+        let slug = repo.owner.login.clone() + ":" + &repo.name;
+        if !prs_sent.contains(&slug){
             println!("PR not sent yet, sending");
-            git_clone("https://github.com/openframeworks/ofxAddonTemplate")
+            git_clone("https://github.com/openframeworks/ofxAddonTemplate", "data/ofxAddonTemplate")
                 .expect("Couldn't clone ofxAddonTemplate");
             let mut default_headers = header::HeaderMap::new();
             default_headers.append(header::USER_AGENT, header::HeaderValue::from_static("ofxaddons"));
@@ -524,10 +536,16 @@ fn send_one_test_pr(repo: &Repository, oauth_token: &str){
                 .unwrap();
             let pr_sent = send_pr(&mut http, oauth_token, repo);
 
-            fs::remove_dir_all("ofxAddonTemplate")
+            fs::remove_dir_all("data/ofxAddonTemplate")
                 .expect("Couldn't remove repository directory");
             pr_sent.unwrap();
             println!("PR sent correctly");
+
+            prs_sent.insert(slug);
+            let mut prs_sent_file = File::create(&prs_sent_path).unwrap();
+            for pr in prs_sent{
+                prs_sent_file.write(&(pr + "\n").into_bytes()).unwrap();
+            }
         }else{
             panic!("PR already sent");
         }
@@ -541,20 +559,25 @@ fn timestamp(ts: &time::Tm) -> String{
 fn checkaddons(repos: &Vec<Repository>) -> Vec<bool>{
     //let client = Client::new();
     let ts = time::now();
-    let mut failed = File::create(format!("failed_addons{}.out", timestamp(&ts))).unwrap();
-    let mut correct = File::create(format!("correct_addons{}.out", timestamp(&ts))).unwrap();
+    let mut failed = File::create(Path::new("data").join(format!("failed_addons{}.out", timestamp(&ts)))).unwrap();
+    let mut correct = File::create(Path::new("data").join(format!("correct_addons{}.out", timestamp(&ts)))).unwrap();
     repos.iter().map(|repo|{
         let slug = format!("{}:{}", repo.owner.login, repo.name);
+        let repo_path = Path::new("data").join(&slug);
         let test_addon_result = if repo.whitelisted {
             Ok("Addon is included in the whitelist".to_string())
+        }else if git_shallow_clone(&repo.html_url, &slug).expect("Failed cloning").status.success(){;
+            test_correct_addon(&repo_path, &repo.name)
         }else{
-            git_shallow_clone(&repo.html_url, &slug).expect("Failed cloning");
-            test_correct_addon(&slug, &repo.name)
+            println!("{} failed to download.", slug);
+            failed.write(&slug.into_bytes()).unwrap();
+            failed.write(&"\n".to_string().into_bytes()).unwrap();
+            return false;
         };
 
         if test_addon_result.is_ok(){
             if !repo.whitelisted{
-                fs::remove_dir_all(&slug).expect("Couldn't remove repository directory");
+                fs::remove_dir_all(&repo_path).expect("Couldn't remove repository directory");
             }
             correct.write(&slug.into_bytes()).unwrap();
             correct.write(&format!(" {}\n", test_addon_result.unwrap()).into_bytes()).unwrap();
@@ -571,10 +594,10 @@ fn checkaddons(repos: &Vec<Repository>) -> Vec<bool>{
 fn checkexistingaddons(){
     //let client = Client::new();
     let ts = time::now();
-    let mut failed = File::create(format!("failed_addons{}.out", timestamp(&ts))).unwrap();
-    let mut correct = File::create(format!("correct_addons{}.out", timestamp(&ts))).unwrap();
+    let mut failed = File::create(Path::new("data").join(format!("failed_addons{}.out", timestamp(&ts)))).unwrap();
+    let mut correct = File::create(Path::new("data").join(format!("correct_addons{}.out", timestamp(&ts)))).unwrap();
     let addon_re = Regex::new(".*:ofx.*").unwrap();
-    let repos = Path::new(".").read_dir().unwrap()
+    let repos = Path::new("data").read_dir().unwrap()
         .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
         .filter_map(|entry| {
             let path = entry.as_ref().unwrap().path();
@@ -639,7 +662,7 @@ fn main() {
     let owner = matches.value_of("owner");
 
     let mut oauth_token = String::new();
-    File::open("oauth.tok").unwrap().read_to_string(&mut oauth_token).unwrap();
+    File::open("secret/oauth.tok").unwrap().read_to_string(&mut oauth_token).unwrap();
     let oauth_token = oauth_token.trim();
 
     let repos = if !checkexisting && !only{
