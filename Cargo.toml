@@ -10,6 +10,7 @@ clap = "2.19.2"
 regex = "0.1"
 walkdir = "1"
 reqwest = "*"
+log = "*"
 
 [dependencies.json]
 git = "https://github.com/maciejhirsz/json-rust"

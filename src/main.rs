@@ -4,6 +4,7 @@ extern crate clap;
 extern crate regex;
 extern crate walkdir;
 extern crate reqwest;
+#[macro_use] extern crate log;
 
 use reqwest::{header, Url};
 
@@ -27,17 +28,17 @@ use std::error::Error;
 
 static OFXADDONS_LOGIN: &'static str = "ofxaddons-tests";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 struct Owner{
     login: String
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 struct Repository {
+    owner: Owner,
     name: String,
     html_url: String,
     url: String,
-    owner: Owner,
     whitelisted: bool,
 }
 
@@ -48,7 +49,7 @@ impl Repository{
 }
 
 fn git_clone<P: AsRef<Path>>(repo: &str, path: P) -> IoResult<Output>{
-    println!("Cloning {} to {}", repo, path.as_ref().display());
+    info!("Cloning {} to {}", repo, path.as_ref().display());
     Command::new("git")
             .arg("clone")
             .arg(repo)
@@ -57,7 +58,7 @@ fn git_clone<P: AsRef<Path>>(repo: &str, path: P) -> IoResult<Output>{
 }
 
 fn git_shallow_clone<P: AsRef<Path>>(repo: &str, path: P) -> IoResult<Output>{
-    println!("Shallow cloning {} to {}", repo, path.as_ref().display());
+    info!("Shallow cloning {} to {}", repo, path.as_ref().display());
     let mut command = Command::new("git");
     command.arg("clone")
             .arg("--depth")
@@ -264,7 +265,7 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
                         .filter(|item| !item.trim().is_empty())
                         .collect::<Vec<_>>();
 
-    println!("Next: {}", url);
+    info!("Next: {}", url);
     let mut url = Url::parse(&url).unwrap();
     let mut default_headers = header::HeaderMap::new();
     default_headers.append(header::USER_AGENT, header::HeaderValue::from_static("ofxaddons"));
@@ -309,8 +310,8 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
                 let rels: HashMap<_,_> = link.split(",")
                     .map(|rel|{
                         let mut link_rel = rel.split(";");
-                        let link = link_rel.next().unwrap();
-                        let rel = link_rel.next().unwrap();
+                        let link = link_rel.next().unwrap().trim();
+                        let rel = link_rel.next().unwrap().trim();
                         let rel = rel.split("\"").skip(1).next().unwrap().to_string();
                         let url = link[1..link.len()-1].to_string();
                         (rel, url)
@@ -322,7 +323,7 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
                         url = next.parse().unwrap();
                         if remaining.parse::<u32>().unwrap()==0 {
                             let pause = reset - time::now().to_timespec();
-                            println!("pausing for {}s", pause.num_seconds());
+                            info!("pausing for {}s", pause.num_seconds());
                             thread::sleep(pause.to_std().unwrap());
                             // http = SimpleHttp::new();
                         }
@@ -330,7 +331,7 @@ fn build_repos_index(oauth_token: &str, owner: Option<&str>) -> Vec<Repository>{
                     None => break
                 }
 
-                println!("{}/{} Next: {}", remaining, ratelimit, url);
+                info!("{}/{} Next: {}", remaining, ratelimit, url);
             }else{
                 break;
             },
@@ -395,7 +396,7 @@ fn send_pr(http: &mut reqwest::Client, oauth_token: &str, repo: &Repository) -> 
             if res.status().is_success(){
                 break;
             }else{
-                println!("Fork hasn't finished yet, waiting 10s");
+                info!("Fork hasn't finished yet, waiting 10s");
             }
         }
     }
@@ -513,7 +514,7 @@ fn send_test_prs(repos: &Vec<Repository>, oauth_token: &str){
 fn send_one_test_pr(repo: &Repository, oauth_token: &str){
     let prs_sent_path = Path::new("config").join("prs_sent");
     if checkaddons(&vec![repo.clone()])[0]{
-        println!("Correct addon detected");
+        info!("Correct addon detected");
         let mut prs_sent = String::new();
         let mut prs_sent = match File::open(&prs_sent_path){
             Ok(mut file) => {
@@ -524,7 +525,7 @@ fn send_one_test_pr(repo: &Repository, oauth_token: &str){
         };
         let slug = repo.owner.login.clone() + ":" + &repo.name;
         if !prs_sent.contains(&slug){
-            println!("PR not sent yet, sending");
+            info!("PR not sent yet, sending");
             git_clone("https://github.com/openframeworks/ofxAddonTemplate", "data/ofxAddonTemplate")
                 .expect("Couldn't clone ofxAddonTemplate");
             let mut default_headers = header::HeaderMap::new();
@@ -539,7 +540,7 @@ fn send_one_test_pr(repo: &Repository, oauth_token: &str){
             fs::remove_dir_all("data/ofxAddonTemplate")
                 .expect("Couldn't remove repository directory");
             pr_sent.unwrap();
-            println!("PR sent correctly");
+            info!("PR sent correctly");
 
             prs_sent.insert(slug);
             let mut prs_sent_file = File::create(&prs_sent_path).unwrap();
@@ -569,7 +570,7 @@ fn checkaddons(repos: &Vec<Repository>) -> Vec<bool>{
         }else if git_shallow_clone(&repo.html_url, &slug).expect("Failed cloning").status.success(){;
             test_correct_addon(&repo_path, &repo.name)
         }else{
-            println!("{} failed to download.", slug);
+            error!("{} failed to download.", slug);
             failed.write(&slug.into_bytes()).unwrap();
             failed.write(&"\n".to_string().into_bytes()).unwrap();
             return false;
@@ -583,7 +584,7 @@ fn checkaddons(repos: &Vec<Repository>) -> Vec<bool>{
             correct.write(&format!(" {}\n", test_addon_result.unwrap()).into_bytes()).unwrap();
             true
         }else{
-            println!("{} doesn't look like a correct addon, keeping in the fs for review.", slug);
+            info!("{} doesn't look like a correct addon, keeping in the fs for review.", slug);
             failed.write(&slug.into_bytes()).unwrap();
             failed.write(&"\n".to_string().into_bytes()).unwrap();
             false
@@ -618,7 +619,7 @@ fn checkexistingaddons(){
                 correct.write(&format!(" {}\n", reason).into_bytes()).unwrap();
             },
             Err(_) => {
-                println!("{} doesn't look like a correct addon, keeping in the fs for review.", slug);
+                error!("{} doesn't look like a correct addon, keeping in the fs for review.", slug);
                 failed.write(&slug.into_bytes()).unwrap();
                 failed.write(&"\n".to_string().into_bytes()).unwrap();
             }
@@ -665,7 +666,7 @@ fn main() {
     File::open("secret/oauth.tok").unwrap().read_to_string(&mut oauth_token).unwrap();
     let oauth_token = oauth_token.trim();
 
-    let repos = if !checkexisting && !only{
+    let mut repos = if !checkexisting && !only{
         build_repos_index(oauth_token, owner)
     }else if only{
         if let Some(repo) = matches.value_of("repo"){
@@ -673,7 +674,7 @@ fn main() {
             if owner_repo.len() == 2 {
                 let owner = owner_repo[0];
                 let repo = owner_repo[1];
-                println!("Checking {}:{}", owner, repo);
+                info!("Checking {}:{}", owner, repo);
                 vec![Repository{
                     name: repo.to_owned(),
                     html_url: "https://github.com/".to_owned() + owner + "/" + repo,
@@ -694,20 +695,21 @@ fn main() {
     };
 
     if listonly{
+        repos.sort();
         for repo in repos{
             println!("{}:{}", repo.owner.login, repo.name)
         }
     }else if checkexisting{
-        println!("Checking exisiting");
+        info!("Checking exisiting");
         checkexistingaddons();
     }else if checkonly{
-        println!("Only checking");
+        info!("Only checking");
         checkaddons(&repos);
     }else if only{
         let repo = &repos[0];
         send_one_test_pr(repo, oauth_token);
     }else{
-        println!("Sending all PRs");
+        info!("Sending all PRs");
         send_test_prs(&repos, oauth_token);
     }
 
